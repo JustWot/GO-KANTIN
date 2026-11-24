@@ -1,6 +1,6 @@
 const SUPABASE_URL = 'https://ndotagcjnxxocclmmjly.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_PgpkUt_5Juh0zLQ8U8RC5A_GhqeZB2l'; // Starts with eyJhbGci...
-const GA_MEASUREMENT_ID = 'G-XXXXXXXXXX'; // Replace with your GA4 Measurement ID
+const GA_MEASUREMENT_ID = 'G-JZBCNXZZQ8'; // Replace with your GA4 Measurement ID
 
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
