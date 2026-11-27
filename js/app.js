@@ -1,5 +1,7 @@
 // Student page: browse menu, cart, place order, track status
 const session = requireRole(['student']);
+// Delivery location shown to canteen & courier: "Kelas • Ruangan"
+let studentLocation = session ? (session.room ? `${session.class} • ${session.room}` : session.class) : '';
 
 let allMenus = [];
 let cart = {}; // menuId -> { menu, qty }
@@ -105,7 +107,7 @@ async function submitOrder() {
   const order = {
     order_id: newOrderId(),
     student_name: session.name,
-    location: session.class,
+    location: studentLocation,
     items: entries.map(c => ({
       id: c.menu.id, name: c.menu.name, stall: c.menu.stall, price: c.menu.price, quantity: c.qty,
     })),
@@ -128,7 +130,7 @@ async function submitOrder() {
 // ---------- My orders ----------
 async function loadMyOrders() {
   const { data, error } = await db.from('orders').select('*')
-    .eq('student_name', session.name).eq('location', session.class)
+    .eq('student_name', session.name).like('location', session.class.replace(/[%_]/g, '') + '%')
     .order('created_at', { ascending: false }).limit(10);
   const box = document.getElementById('my-orders-list');
   if (error) { box.innerHTML = `<p class="text-xs text-red-500 text-center py-4">${esc(error.message)}</p>`; return; }
@@ -157,7 +159,7 @@ async function loadMyOrders() {
 
 document.addEventListener('DOMContentLoaded', () => {
   if (!session) return;
-  document.getElementById('student-info').textContent = `${session.name} • ${session.class}`;
+  document.getElementById('student-info').textContent = `${session.name} • ${studentLocation}`;
   loadMenus();
   loadMyOrders();
   renderCart();
@@ -166,3 +168,15 @@ document.addEventListener('DOMContentLoaded', () => {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, loadMenus)
     .subscribe();
 });
+
+// Let a student change room without logging out
+function changeRoom() {
+  const current = session.room || '';
+  const room = (prompt('Masukkan ruangan baru:', current) || '').trim();
+  if (!room) return;
+  session.room = room;
+  localStorage.setItem('gokantin_user', JSON.stringify(session));
+  studentLocation = `${session.class} • ${room}`;
+  document.getElementById('student-info').textContent = `${session.name} • ${studentLocation}`;
+  loadMyOrders();
+}
