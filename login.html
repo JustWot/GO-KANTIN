@@ -117,26 +117,35 @@
 
       if (!username || !password) return alert('Username dan password wajib diisi!');
 
-      if (!isRegister && username === 'master' && password === 'admin123') {
-        localStorage.setItem('gokantin_user', JSON.stringify({ username: 'master', role: 'master' }));
-        window.location.href = 'master.html';
-        return;
-      }
+      const btn = document.getElementById('submit-btn');
+      btn.disabled = true;
+      try {
+        const password_hash = await hashPassword(password);
 
-      if (isRegister) {
-        if (!shop_name) return alert('Nama kantin/kurir wajib diisi!');
-        const { error } = await db.from('owners').insert([{ username, password, shop_name, role: currentRole, verified: false }]);
-        if (error) return alert('Gagal daftar: ' + error.message);
-        trackEvent('sign_up', { role: currentRole });
-        alert('Pendaftaran berhasil! Tunggu persetujuan Master Admin.');
-        toggleRegister();
-      } else {
-        const { data: user, error } = await db.from('owners').select('*').eq('username', username).eq('password', password).single();
-        if (error || !user) return alert('Username atau password salah!');
+        if (isRegister) {
+          if (!shop_name) return alert('Nama kantin/kurir wajib diisi!');
+          const { error } = await db.from('owners').insert([{ username, password: password_hash, shop_name, role: currentRole, verified: false }]);
+          if (error) return alert(error.code === '23505' ? 'Username sudah dipakai!' : 'Gagal daftar: ' + error.message);
+          trackEvent('sign_up', { role: currentRole });
+          alert('Pendaftaran berhasil! Tunggu persetujuan Master Admin.');
+          toggleRegister();
+          return;
+        }
+
+        const { data: user, error } = await db.from('owners').select('*')
+          .eq('username', username).eq('password', password_hash).maybeSingle();
+        if (error) return alert('Terjadi kesalahan: ' + error.message);
+        if (!user) return alert('Username atau password salah!');
         if (!user.verified) return alert('Akun belum diverifikasi Master Admin.');
-        localStorage.setItem('gokantin_user', JSON.stringify(user));
+        if (user.role !== 'master' && user.role !== currentRole)
+          return alert(`Akun ini terdaftar sebagai ${user.role}. Pilih tab "${user.role === 'admin' ? 'Kantin' : 'Kurir'}".`);
+
+        const { password: _omit, ...safeUser } = user; // never keep the hash in localStorage
+        localStorage.setItem('gokantin_user', JSON.stringify(safeUser));
         trackEvent('login', { method: user.role });
-        window.location.href = user.role === 'kurir' ? 'kurir.html' : 'admin.html';
+        window.location.href = user.role === 'master' ? 'master.html' : user.role === 'kurir' ? 'kurir.html' : 'admin.html';
+      } finally {
+        btn.disabled = false;
       }
     }
   </script>

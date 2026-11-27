@@ -14,28 +14,13 @@
       <span class="bg-blue-600 text-white font-black text-xs px-2.5 py-1 rounded-lg">KURIR</span>
       <div>
         <h1 class="text-base font-black">Panel Pengantar</h1>
-        <p id="kurir-name-label" class="text-[11px] text-slate-400">Ambil & antar pesanan ke kelas</p>
+        <p class="text-[11px] text-slate-400">Ambil & antar pesanan ke kelas</p>
       </div>
     </div>
-    <div class="flex items-center gap-2">
-      <a href="master.html" id="master-nav-btn" class="hidden text-xs bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl font-bold transition">Master</a>
-      <button onclick="logout()" class="text-xs bg-red-600/90 hover:bg-red-600 px-3.5 py-2 rounded-xl font-bold transition">Keluar</button>
-    </div>
+    <button onclick="logout()" class="text-xs bg-red-600/90 hover:bg-red-600 px-3.5 py-2 rounded-xl font-bold transition">Keluar</button>
   </header>
 
   <main class="max-w-2xl mx-auto p-4 sm:p-6 space-y-6">
-    <section class="bg-gradient-to-r from-blue-600 to-indigo-700 text-white rounded-3xl p-6 shadow-md flex justify-between items-center">
-      <div>
-        <p class="text-xs font-bold uppercase tracking-wider text-blue-100">Total Pendapatan Kurir</p>
-        <h2 id="kurir-earnings" class="text-3xl font-black mt-1">Rp 0</h2>
-        <p id="kurir-trip-count" class="text-xs text-blue-100 mt-1">0 pengantaran selesai</p>
-      </div>
-      <div class="bg-white/15 px-4 py-2.5 rounded-2xl text-right">
-        <p class="text-[11px] text-blue-100">Tarif / Item</p>
-        <p id="fee-rate-label" class="font-black text-sm">Rp 2.000</p>
-      </div>
-    </section>
-
     <section class="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
       <h2 class="text-sm font-black uppercase text-slate-900 mb-3">📦 Siap Diambil di Kantin</h2>
       <div id="ready-list" class="space-y-3"></div>
@@ -49,179 +34,51 @@
 
   <script src="js/config.js"></script>
   <script>
-    const session = JSON.parse(localStorage.getItem('gokantin_user') || '{}');
-    if (session.role !== 'kurir' && session.role !== 'master') {
-      window.location.href = 'login.html';
-    }
-
-    const FEE_PER_ITEM = typeof DELIVERY_FEE_PER_ITEM === 'number' ? DELIVERY_FEE_PER_ITEM : 2000;
-
-    if (session.role === 'master') {
-      document.getElementById('master-nav-btn')?.classList.remove('hidden');
-    }
-    if (session.shop_name) {
-      document.getElementById('kurir-name-label').textContent = `${session.shop_name} • Antar ke kelas`;
-    }
-    document.getElementById('fee-rate-label').textContent = formatIDR(FEE_PER_ITEM);
-
-    function parseItems(rawItems) {
-      if (Array.isArray(rawItems)) return rawItems;
-      try {
-        return JSON.parse(rawItems || '[]');
-      } catch {
-        return [];
-      }
-    }
-
-    function getOrderFee(order) {
-      if (typeof order.delivery_fee === 'number' && order.delivery_fee > 0) {
-        return order.delivery_fee;
-      }
-      const items = parseItems(order.items);
-      const itemCount = items.reduce((sum, i) => sum + Number(i.quantity || 1), 0);
-      return itemCount * FEE_PER_ITEM;
-    }
-
-    async function loadKurirEarnings() {
-      if (!session.username || session.role === 'master') {
-        const { data: deliveredOrders, error } = await db
-          .from('orders')
-          .select('delivery_fee, items')
-          .eq('status', 'delivered');
-
-        if (error) {
-          console.error('Gagal memuat pendapatan kurir:', error);
-          return;
-        }
-
-        const list = deliveredOrders || [];
-        const totalFee = list.reduce((sum, o) => sum + getOrderFee(o), 0);
-        document.getElementById('kurir-earnings').textContent = formatIDR(totalFee);
-        document.getElementById('kurir-trip-count').textContent = `${list.length} pengantaran selesai`;
-        return;
-      }
-
-      const { data: owner, error } = await db
-        .from('owners')
-        .select('earnings, deliveries_count')
-        .eq('username', session.username)
-        .single();
-
-      if (!error && owner) {
-        document.getElementById('kurir-earnings').textContent = formatIDR(owner.earnings || 0);
-        document.getElementById('kurir-trip-count').textContent = `${owner.deliveries_count || 0} pengantaran selesai`;
-      }
-    }
+    const session = requireRole(['kurir', 'master']);
 
     async function loadKurirOrders() {
-      const readyEl = document.getElementById('ready-list');
-      const deliveringEl = document.getElementById('delivering-list');
+      const { data: orders, error } = await db.from('orders').select('*').in('status', ['ready', 'delivering']).order('created_at', { ascending: true });
+      if (error) { alert('Gagal memuat pesanan: ' + error.message); return; }
+      const ready = (orders || []).filter(o => o.status === 'ready');
+      const delivering = (orders || []).filter(o => o.status === 'delivering');
 
-      const { data: orders, error } = await db
-        .from('orders')
-        .select('*')
-        .in('status', ['ready', 'delivering'])
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Gagal memuat pesanan kurir:', error);
-        readyEl.innerHTML = `<p class="text-xs text-red-500 text-center py-4">Gagal memuat pesanan: ${error.message}</p>`;
-        deliveringEl.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Tidak ada pengantaran aktif.</p>`;
-        return;
-      }
-
-      const all = orders || [];
-      const ready = all.filter(o => o.status === 'ready');
-      const delivering = all.filter(o => o.status === 'delivering');
-
-      readyEl.innerHTML = ready.length === 0
+      document.getElementById('ready-list').innerHTML = ready.length === 0
         ? `<p class="text-xs text-slate-400 text-center py-4">Belum ada pesanan siap ambil.</p>`
-        : ready.map(o => {
-          const items = parseItems(o.items);
-          const fee = getOrderFee(o);
-          const totalItems = items.reduce((sum, i) => sum + Number(i.quantity || 1), 0);
-          const totalAmount = Number(o.total_amount || 0);
-          return `
-            <div class="p-4 bg-slate-50 rounded-2xl border-l-4 border-amber-500 space-y-2 text-xs">
-              <div class="flex justify-between items-start">
-                <div>
-                  <span class="font-black text-sm text-slate-900">${o.student_name} (${o.location})</span>
-                  <p class="text-[11px] text-emerald-700 font-bold mt-0.5">Upah Kamu (${totalItems} item): +${formatIDR(fee)}</p>
-                </div>
-                <span class="font-black text-slate-700">Total COD: ${formatIDR(totalAmount)}</span>
-              </div>
-              <ul class="pl-4 list-disc text-slate-700">
-                ${items.map(i => `<li>${i.name} (x${i.quantity || 1}) - ${i.stall || 'Kantin'}</li>`).join('')}
-              </ul>
-              <button onclick="setStatus('${o.order_id}', 'delivering', ${fee})" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl">🛵 Ambil & Antar</button>
+        : ready.map(o => `
+          <div class="p-4 bg-slate-50 rounded-2xl border-l-4 border-amber-500 space-y-2 text-xs">
+            <div class="flex justify-between font-black text-sm">
+              <span>${esc(o.student_name)} (${esc(o.location)})</span>
+              <span class="text-emerald-600">${formatIDR(o.total_amount)}</span>
             </div>
-          `;
-        }).join('');
+            <ul class="pl-4 list-disc text-slate-700">${(o.items || []).map(i => `<li>${esc(i.name)} (x${i.quantity}) - ${esc(i.stall)}</li>`).join('')}</ul>
+            <button onclick="setStatus('${esc(o.order_id)}', 'delivering')" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl">🛵 Ambil & Antar</button>
+          </div>
+        `).join('');
 
-      deliveringEl.innerHTML = delivering.length === 0
+      document.getElementById('delivering-list').innerHTML = delivering.length === 0
         ? `<p class="text-xs text-slate-400 text-center py-4">Tidak ada pengantaran aktif.</p>`
-        : delivering.map(o => {
-          const fee = getOrderFee(o);
-          const totalAmount = Number(o.total_amount || 0);
-          const canteenShare = Math.max(0, totalAmount - fee);
-          return `
-            <div class="p-4 bg-slate-50 rounded-2xl border-l-4 border-blue-600 space-y-2 text-xs">
-              <div class="flex justify-between font-black text-sm">
-                <span>${o.student_name} (${o.location})</span>
-                <span class="text-blue-700">Tagih Siswa: ${formatIDR(totalAmount)}</span>
-              </div>
-              <div class="bg-white p-2.5 rounded-xl border border-slate-200 flex justify-between text-[11px]">
-                <span class="text-slate-500">Setor ke Kantin: <strong class="text-slate-800">${formatIDR(canteenShare)}</strong></span>
-                <span class="text-emerald-600 font-black">Upah Kurir: ${formatIDR(fee)}</span>
-              </div>
-              <button onclick="setStatus('${o.order_id}', 'delivered', ${fee})" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl">✓ Sudah Diterima Siswa</button>
+        : delivering.map(o => `
+          <div class="p-4 bg-slate-50 rounded-2xl border-l-4 border-blue-600 space-y-2 text-xs">
+            <div class="flex justify-between font-black text-sm">
+              <span>${esc(o.student_name)} (${esc(o.location)})</span>
+              <span class="text-emerald-600">Tagih: ${formatIDR(o.total_amount)}</span>
             </div>
-          `;
-        }).join('');
+            <button onclick="setStatus('${esc(o.order_id)}', 'delivered')" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl">✓ Sudah Diterima Siswa</button>
+          </div>
+        `).join('');
     }
 
-    async function setStatus(orderId, status, feeAmount = 0) {
-      const { error: orderErr } = await db
-        .from('orders')
-        .update({ status })
-        .eq('order_id', orderId);
-
-      if (orderErr) return alert('Gagal update status: ' + orderErr.message);
-
-      if (status === 'delivered' && session.username && session.role === 'kurir') {
-        const { data: owner } = await db
-          .from('owners')
-          .select('earnings, deliveries_count')
-          .eq('username', session.username)
-          .single();
-
-        const currentEarnings = Number(owner?.earnings || 0);
-        const currentTrips = Number(owner?.deliveries_count || 0);
-
-        await db
-          .from('owners')
-          .update({
-            earnings: currentEarnings + Number(feeAmount || 0),
-            deliveries_count: currentTrips + 1
-          })
-          .eq('username', session.username);
-      }
-
-      trackEvent('delivery_status_update', { order_id: orderId, status, fee: feeAmount });
-      await loadKurirOrders();
-      await loadKurirEarnings();
+    async function setStatus(orderId, status) {
+      const { error } = await db.from('orders').update({ status }).eq('order_id', orderId);
+      if (error) return alert('Gagal update status: ' + error.message);
+      trackEvent('delivery_status_update', { order_id: orderId, status });
+      loadKurirOrders();
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      if (!session) return;
       loadKurirOrders();
-      loadKurirEarnings();
-      db.channel('kurir-live')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-          loadKurirOrders();
-          loadKurirEarnings();
-        })
-        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'owners' }, loadKurirEarnings)
-        .subscribe();
+      db.channel('kurir-live').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, loadKurirOrders).subscribe();
     });
   </script>
 </body>

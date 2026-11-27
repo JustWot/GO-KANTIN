@@ -38,11 +38,11 @@
 
   <script src="js/config.js"></script>
   <script>
-    const session = JSON.parse(localStorage.getItem('gokantin_user') || '{}');
-    if (session.role !== 'master') window.location.href = 'login.html';
+    const session = requireRole(['master']);
 
     async function loadAccounts() {
-      const { data: accounts } = await db.from('owners').select('*').order('created_at', { ascending: false });
+      const { data: accounts, error } = await db.from('owners').select('id, username, shop_name, role, verified, created_at').neq('role', 'master').order('created_at', { ascending: false });
+      if (error) { alert('Gagal memuat akun: ' + error.message); return; }
       const pending = (accounts || []).filter(a => !a.verified);
       const active = (accounts || []).filter(a => a.verified);
 
@@ -51,13 +51,13 @@
         : pending.map(a => `
           <div class="py-3 flex justify-between items-center text-xs">
             <div>
-              <span class="font-black text-sm">${a.shop_name}</span>
-              <span class="ml-2 px-2 py-0.5 rounded bg-slate-100 font-bold uppercase">${a.role}</span>
-              <p class="text-slate-500">Username: ${a.username}</p>
+              <span class="font-black text-sm">${esc(a.shop_name)}</span>
+              <span class="ml-2 px-2 py-0.5 rounded bg-slate-100 font-bold uppercase">${esc(a.role)}</span>
+              <p class="text-slate-500">Username: ${esc(a.username)}</p>
             </div>
             <div class="flex gap-2">
-              <button onclick="approve('${a.username}')" class="bg-emerald-600 text-white px-3 py-2 rounded-xl font-bold">✓ Setujui</button>
-              <button onclick="removeAcc('${a.username}')" class="bg-red-50 text-red-600 px-3 py-2 rounded-xl font-bold">✕ Tolak</button>
+              <button onclick="approve('${a.id}')" class="bg-emerald-600 text-white px-3 py-2 rounded-xl font-bold">✓ Setujui</button>
+              <button onclick="removeAcc('${a.id}')" class="bg-red-50 text-red-600 px-3 py-2 rounded-xl font-bold">✕ Tolak</button>
             </div>
           </div>
         `).join('');
@@ -67,26 +67,29 @@
         : active.map(a => `
           <div class="py-3 flex justify-between items-center text-xs">
             <div>
-              <span class="font-black text-sm">${a.shop_name}</span> (${a.role})
-              <p class="text-slate-400">${a.username}</p>
+              <span class="font-black text-sm">${esc(a.shop_name)}</span> (${esc(a.role)})
+              <p class="text-slate-400">${esc(a.username)}</p>
             </div>
-            <button onclick="removeAcc('${a.username}')" class="text-red-500 font-bold hover:underline">Hapus</button>
+            <button onclick="removeAcc('${a.id}')" class="text-red-500 font-bold hover:underline">Hapus</button>
           </div>
         `).join('');
     }
 
-    async function approve(username) {
-      await db.from('owners').update({ verified: true }).eq('username', username);
+    async function approve(id) {
+      const { error } = await db.from('owners').update({ verified: true }).eq('id', id);
+      if (error) alert('Gagal: ' + error.message);
       loadAccounts();
     }
 
-    async function removeAcc(username) {
+    async function removeAcc(id) {
       if (!confirm('Hapus akun ini?')) return;
-      await db.from('owners').delete().eq('username', username);
+      const { error } = await db.from('owners').delete().eq('id', id);
+      if (error) alert('Gagal: ' + error.message);
       loadAccounts();
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+      if (!session) return;
       loadAccounts();
       db.channel('master-live').on('postgres_changes', { event: '*', schema: 'public', table: 'owners' }, loadAccounts).subscribe();
     });
