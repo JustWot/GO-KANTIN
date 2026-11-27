@@ -3,8 +3,8 @@
 // ============================================================
 
 // 1) Fill these from Supabase → Project Settings → API
-const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
-const SUPABASE_ANON_KEY = 'YOUR-ANON-KEY';
+const SUPABASE_URL = 'https://ndotagcjnxxocclmmjly.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_PgpkUt_5Juh0zLQ8U8RC5A_GhqeZB2l';
 
 // 2) Business rules
 const DELIVERY_FEE_PER_ITEM = 1000; // Rp per item
@@ -60,6 +60,17 @@ async function hashPassword(password) {
 function trackEvent(name, params = {}) {
   try { if (typeof gtag === 'function') gtag('event', name, params); } catch (_) {}
 }
+
+// Google Analytics (GA4)
+const GA_ID = 'G-XXXXXXXXXX';
+window.dataLayer = window.dataLayer || [];
+function gtag() { dataLayer.push(arguments); }
+gtag('js', new Date());
+gtag('config', GA_ID);
+const gaScript = document.createElement('script');
+gaScript.async = true;
+gaScript.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
+document.head.appendChild(gaScript);
 
 function newOrderId() {
   return 'GK-' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
