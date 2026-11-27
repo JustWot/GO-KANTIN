@@ -62,7 +62,7 @@ function trackEvent(name, params = {}) {
 }
 
 // Google Analytics (GA4)
-const GA_ID = 'G-XXXXXXXXXX';
+const GA_ID = 'G-JZBCNXZZQ8';
 window.dataLayer = window.dataLayer || [];
 function gtag() { dataLayer.push(arguments); }
 gtag('js', new Date());
