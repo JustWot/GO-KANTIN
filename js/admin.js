@@ -1,146 +1,135 @@
-const session = JSON.parse(localStorage.getItem('gokantin_user') || '{}');
-if (session.role !== 'admin' && session.role !== 'master') window.location.href = 'login.html';
+// Canteen panel: add/delete menus, process incoming orders
+const session = requireRole(['admin', 'master']);
+const isMaster = session && session.role === 'master';
+const shopName = session ? (session.shop_name || '') : '';
 
-if (session.shop_name) {
-  document.getElementById('shop-title').textContent = session.shop_name;
-  document.getElementById('menu-stall').value = session.shop_name;
-}
-
-function playChime() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.setValueAtTime(660, ctx.currentTime);
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.4);
-  } catch (e) {}
-}
+const sameStall = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
 async function addNewMenu(e) {
   e.preventDefault();
   const btn = document.getElementById('save-menu-btn');
-  btn.textContent = 'Mengunggah...';
-  btn.disabled = true;
+  btn.disabled = true; btn.textContent = 'Menyimpan...';
 
-  const name = document.getElementById('menu-name').value.trim();
-  const stall = document.getElementById('menu-stall').value.trim();
-  const price = parseInt(document.getElementById('menu-price').value, 10);
-  const category = document.getElementById('menu-category').value;
-  const fileInput = document.getElementById('menu-file');
-
-  let imageUrl = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
-
-  if (fileInput.files && fileInput.files[0]) {
-    const file = fileInput.files[0];
-    const fileName = `menu_${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
-    const { error: uploadErr } = await db.storage.from('menu-images').upload(fileName, file);
-    if (uploadErr) {
-      alert('Gagal upload foto: ' + uploadErr.message);
-      btn.textContent = 'Simpan & Terbitkan Menu';
-      btn.disabled = false;
-      return;
+  try {
+    let image_url = null;
+    const file = document.getElementById('menu-file').files[0];
+    if (file) {
+      if (file.size > 3 * 1024 * 1024) throw new Error('Ukuran foto maksimal 3 MB.');
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const { error: upErr } = await db.storage.from(STORAGE_BUCKET).upload(path, file, { contentType: file.type });
+      if (upErr) throw upErr;
+      image_url = db.storage.from(STORAGE_BUCKET).getPublicUrl(path).data.publicUrl;
     }
-    const { data: pubUrl } = db.storage.from('menu-images').getPublicUrl(fileName);
-    imageUrl = pubUrl.publicUrl;
+
+    const { error } = await db.from('menus').insert([{
+      name: document.getElementById('menu-name').value.trim(),
+      stall: document.getElementById('menu-stall').value.trim(),
+      price: parseInt(document.getElementById('menu-price').value, 10),
+      category: document.getElementById('menu-category').value,
+      image_url,
+      owner_username: session.username,
+    }]);
+    if (error) throw error;
+
+    trackEvent('menu_added');
+    e.target.reset();
+    document.getElementById('menu-stall').value = shopName;
+    loadMenus();
+  } catch (err) {
+    alert('Gagal menyimpan menu: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Simpan & Terbitkan Menu';
   }
-
-  const { error } = await db.from('menus').insert([{
-    id: 'menu_' + Date.now(),
-    name,
-    stall,
-    price,
-    category,
-    image: imageUrl
-  }]);
-
-  btn.textContent = 'Simpan & Terbitkan Menu';
-  btn.disabled = false;
-
-  if (error) return alert('Gagal menyimpan menu: ' + error.message);
-
-  trackEvent('create_menu_item', { stall_name: stall, category, price });
-  alert(`Menu "${name}" berhasil ditambahkan!`);
-  e.target.reset();
-  if (session.shop_name) document.getElementById('menu-stall').value = session.shop_name;
-  loadMenus();
 }
 
 async function loadMenus() {
-  const { data: menus } = await db.from('menus').select('*').order('created_at', { ascending: false });
-  const container = document.getElementById('admin-menu-list');
-  if (!menus || menus.length === 0) {
-    container.innerHTML = `<p class="text-xs text-slate-400 col-span-2 text-center py-4">Belum ada menu.</p>`;
-    return;
-  }
-
-  const filtered = session.role === 'master' ? menus : menus.filter(m => m.stall === session.shop_name);
-  container.innerHTML = filtered.map(m => `
-    <div class="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex justify-between items-center">
-      <div class="flex items-center gap-3">
-        <img src="${m.image}" class="w-12 h-12 rounded-xl object-cover" />
-        <div>
-          <h4 class="font-black text-xs text-slate-900">${m.name}</h4>
-          <p class="text-[11px] text-emerald-600 font-bold">${formatIDR(m.price)}</p>
+  let q = db.from('menus').select('*').order('created_at', { ascending: false });
+  if (!isMaster) q = q.eq('owner_username', session.username);
+  const { data, error } = await q;
+  const box = document.getElementById('admin-menu-list');
+  if (error) { box.innerHTML = `<p class="text-xs text-red-500">${esc(error.message)}</p>`; return; }
+  box.innerHTML = (data || []).length === 0
+    ? `<p class="text-xs text-slate-400 col-span-full text-center py-4">Belum ada menu.</p>`
+    : data.map(m => `
+      <div class="flex gap-3 p-3 bg-slate-50 rounded-2xl text-xs">
+        ${m.image_url
+          ? `<img src="${esc(m.image_url)}" class="w-14 h-14 rounded-xl object-cover" alt="" />`
+          : `<div class="w-14 h-14 rounded-xl bg-slate-200 flex items-center justify-center text-xl">🍽️</div>`}
+        <div class="flex-1 min-w-0">
+          <p class="font-black text-sm truncate">${esc(m.name)}</p>
+          <p class="text-slate-500">${esc(m.stall)} • ${esc(m.category)}</p>
+          <p class="font-bold text-emerald-600">${formatIDR(m.price)}</p>
         </div>
+        <button onclick="deleteMenu('${m.id}')" class="text-red-500 font-bold self-start hover:underline">Hapus</button>
       </div>
-      <button onclick="deleteMenu('${m.id}')" class="text-xs text-red-500 hover:bg-red-50 p-2 rounded-xl">🗑️</button>
-    </div>
-  `).join('');
+    `).join('');
 }
 
 async function deleteMenu(id) {
   if (!confirm('Hapus menu ini?')) return;
-  await db.from('menus').delete().eq('id', id);
+  const { error } = await db.from('menus').delete().eq('id', id);
+  if (error) return alert('Gagal menghapus: ' + error.message);
   loadMenus();
 }
 
 async function loadOrders() {
-  const { data: orders } = await db.from('orders').select('*').neq('status', 'delivered').order('created_at', { ascending: false });
-  const container = document.getElementById('admin-orders-list');
-  if (!orders || orders.length === 0) {
-    container.innerHTML = `<p class="text-xs text-slate-400 py-6 text-center">Belum ada pesanan aktif.</p>`;
+  const { data, error } = await db.from('orders').select('*')
+    .in('status', ['pending', 'cooking', 'ready'])
+    .order('created_at', { ascending: true });
+  const box = document.getElementById('admin-orders-list');
+  if (error) { box.innerHTML = `<p class="text-xs text-red-500 py-4">${esc(error.message)}</p>`; return; }
+
+  const mine = (data || []).filter(o => isMaster || (o.items || []).some(i => sameStall(i.stall, shopName)));
+  if (mine.length === 0) {
+    box.innerHTML = `<p class="text-xs text-slate-400 py-6 text-center">Belum ada pesanan masuk.</p>`;
     return;
   }
 
-  container.innerHTML = orders.map(o => `
-    <div class="py-4 text-xs space-y-2">
-      <div class="flex justify-between font-black text-sm">
-        <span>${o.student_name} (${o.location})</span>
-        <span class="text-emerald-600">${formatIDR(o.total_amount)}</span>
-      </div>
-      <p class="text-slate-500">Slot: ${o.slot} • Status: <strong class="uppercase text-amber-600">${o.status}</strong></p>
-      <ul class="pl-4 list-disc text-slate-700">
-        ${o.items.map(i => `<li>${i.name} (x${i.quantity})</li>`).join('')}
-      </ul>
-      <div class="pt-2">
-        ${o.status === 'pending'
-          ? `<button onclick="setOrderReady('${o.order_id}')" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl">📦 Siap Diantar Kurir</button>`
-          : `<span class="bg-blue-50 text-blue-700 px-3 py-1.5 rounded-xl font-bold">Menunggu / Diantar Kurir</span>`
-        }
-      </div>
-    </div>
-  `).join('');
+  box.innerHTML = mine.map(o => {
+    const items = isMaster ? o.items : (o.items || []).filter(i => sameStall(i.stall, shopName));
+    const st = STATUS_LABEL[o.status];
+    let action = '';
+    if (o.status === 'pending')
+      action = `<button onclick="setOrderStatus('${esc(o.order_id)}','cooking')" class="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-2 rounded-xl">👨‍🍳 Mulai Siapkan</button>`;
+    else if (o.status === 'cooking')
+      action = `<button onclick="setOrderStatus('${esc(o.order_id)}','ready')" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl">✓ Siap Diambil Kurir</button>`;
+    else
+      action = `<span class="text-slate-400 font-semibold">Menunggu kurir...</span>`;
+
+    return `
+      <div class="py-4 space-y-2 text-xs">
+        <div class="flex justify-between items-center">
+          <span class="font-black text-sm">${esc(o.student_name)} <span class="text-slate-500 font-semibold">(${esc(o.location)})</span></span>
+          <span class="px-2 py-0.5 rounded-full font-bold ${st.cls}">${st.text}</span>
+        </div>
+        <p class="text-slate-500">${esc(o.order_id)} • ${esc(o.slot)}</p>
+        <ul class="pl-4 list-disc text-slate-700">
+          ${items.map(i => `<li>${esc(i.name)} (x${i.quantity})</li>`).join('')}
+        </ul>
+        <div>${action}</div>
+      </div>`;
+  }).join('');
 }
 
-async function setOrderReady(orderId) {
-  await db.from('orders').update({ status: 'ready' }).eq('order_id', orderId);
+async function setOrderStatus(orderId, status) {
+  const { error } = await db.from('orders').update({ status }).eq('order_id', orderId);
+  if (error) return alert('Gagal update status: ' + error.message);
+  trackEvent('order_status_update', { order_id: orderId, status });
   loadOrders();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (!session) return;
+  document.getElementById('shop-title').textContent = shopName ? `Panel ${shopName}` : 'Panel Kelola Kantin';
+  const stall = document.getElementById('menu-stall');
+  stall.value = shopName;
+  if (!isMaster) { stall.readOnly = true; stall.classList.add('bg-slate-100', 'cursor-not-allowed'); }
+
   loadMenus();
   loadOrders();
   db.channel('admin-live')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, () => {
-      playChime();
-      loadOrders();
-    })
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, loadOrders)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, loadOrders)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, loadMenus)
     .subscribe();
 });

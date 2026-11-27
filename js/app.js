@@ -1,166 +1,168 @@
-const user = JSON.parse(localStorage.getItem('gokantin_user') || '{}');
-if (user.role !== 'student') window.location.href = 'login.html';
+// Student page: browse menu, cart, place order, track status
+const session = requireRole(['student']);
 
-document.getElementById('student-info').textContent = `${user.name} • ${user.class}`;
 let allMenus = [];
-let selectedCategory = 'Semua';
-let cart = [];
+let cart = {}; // menuId -> { menu, qty }
+let activeCategory = 'Semua';
 
-async function fetchMenus() {
-  const { data: menus, error } = await db.from('menus').select('*').order('created_at', { ascending: false });
-  if (error) return console.error(error);
-  allMenus = menus || [];
-  renderMenuGrid();
+async function loadMenus() {
+  const { data, error } = await db.from('menus').select('*').order('created_at', { ascending: false });
+  if (error) {
+    document.getElementById('menu-grid').innerHTML =
+      `<p class="text-xs text-red-500 col-span-full py-8 text-center">Gagal memuat menu: ${esc(error.message)}</p>`;
+    return;
+  }
+  allMenus = data || [];
+  renderMenus();
 }
 
 function filterCategory(cat) {
-  selectedCategory = cat;
+  activeCategory = cat;
   document.querySelectorAll('.cat-btn').forEach(btn => {
-    const active = btn.textContent.trim().startsWith(cat.split(' ')[0]);
-    btn.className = active
-      ? 'cat-btn bg-emerald-600 text-white text-xs font-bold px-3 py-1.5 rounded-xl'
-      : 'cat-btn bg-white text-slate-600 border border-slate-200 text-xs font-bold px-3 py-1.5 rounded-xl';
+    const isActive = btn.getAttribute('onclick').includes(`'${cat}'`);
+    btn.className = 'cat-btn text-xs font-bold px-3 py-1.5 rounded-xl ' +
+      (isActive ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 border border-slate-200');
   });
-  renderMenuGrid();
+  renderMenus();
 }
 
-function renderMenuGrid() {
+function renderMenus() {
+  const list = allMenus.filter(m => activeCategory === 'Semua' || m.category === activeCategory);
   const grid = document.getElementById('menu-grid');
-  const filtered = selectedCategory === 'Semua'
-    ? allMenus
-    : allMenus.filter(m => m.category === selectedCategory);
-
-  if (filtered.length === 0) {
-    grid.innerHTML = `<p class="text-xs text-slate-400 col-span-full py-8 text-center">Belum ada menu pada kategori ini.</p>`;
+  if (list.length === 0) {
+    grid.innerHTML = `<p class="text-xs text-slate-400 col-span-full py-8 text-center">Belum ada menu.</p>`;
     return;
   }
-
-  grid.innerHTML = filtered.map(m => `
-    <div class="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm flex flex-col justify-between">
-      <img src="${m.image || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500'}" class="w-full h-40 object-cover" />
-      <div class="p-4 flex-1 flex flex-col justify-between">
-        <div>
-          <span class="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">${m.stall}</span>
-          <h3 class="font-black text-slate-900 text-base mt-2">${m.name}</h3>
-          <p class="text-emerald-600 font-black text-sm mt-0.5">${formatIDR(m.price)}</p>
+  grid.innerHTML = list.map(m => `
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+      ${m.image_url
+        ? `<img src="${esc(m.image_url)}" alt="${esc(m.name)}" class="h-36 w-full object-cover" loading="lazy" />`
+        : `<div class="h-36 w-full bg-slate-100 flex items-center justify-center text-4xl">🍽️</div>`}
+      <div class="p-4 flex flex-col gap-1 flex-1">
+        <span class="text-[10px] font-bold uppercase text-emerald-700">${esc(m.category)}</span>
+        <h3 class="font-black text-sm">${esc(m.name)}</h3>
+        <p class="text-[11px] text-slate-500">${esc(m.stall)}</p>
+        <div class="mt-auto pt-2 flex justify-between items-center">
+          <span class="font-black text-emerald-600 text-sm">${formatIDR(m.price)}</span>
+          <button onclick="addToCart('${m.id}')" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-1.5 rounded-xl">+ Tambah</button>
         </div>
-        <button onclick='addToCart(${JSON.stringify(m)})' class="mt-4 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition">
-          + Tambah
-        </button>
       </div>
     </div>
   `).join('');
 }
 
-function addToCart(item) {
-  const found = cart.find(c => c.id === item.id);
-  if (found) found.quantity++;
-  else cart.push({ ...item, quantity: 1 });
+// ---------- Cart ----------
+function addToCart(id) {
+  const menu = allMenus.find(m => String(m.id) === String(id));
+  if (!menu) return;
+  cart[id] = cart[id] ? { menu, qty: cart[id].qty + 1 } : { menu, qty: 1 };
+  renderCart();
+}
 
-  trackEvent('add_to_cart', {
-    currency: 'IDR',
-    value: item.price,
-    items: [{ item_id: item.id, item_name: item.name, item_category: item.category, price: item.price, quantity: 1 }]
-  });
-
+function changeQty(id, delta) {
+  if (!cart[id]) return;
+  cart[id].qty += delta;
+  if (cart[id].qty <= 0) delete cart[id];
   renderCart();
 }
 
 function renderCart() {
-  const list = document.getElementById('cart-list');
-  const totalQty = cart.reduce((sum, i) => sum + i.quantity, 0);
-  const totalPrice = cart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+  const entries = Object.entries(cart);
+  const totalQty = entries.reduce((s, [, c]) => s + c.qty, 0);
+  const subtotal = entries.reduce((s, [, c]) => s + c.qty * c.menu.price, 0);
+  const fee = totalQty * DELIVERY_FEE_PER_ITEM;
 
   document.getElementById('cart-badge').textContent = totalQty;
-  document.getElementById('cart-total').textContent = formatIDR(totalPrice);
+  document.getElementById('fee-item-count').textContent = totalQty;
+  document.getElementById('cart-delivery-fee').textContent = formatIDR(fee);
+  document.getElementById('cart-total').textContent = formatIDR(subtotal + fee);
 
-  list.innerHTML = cart.length === 0
+  document.getElementById('cart-list').innerHTML = entries.length === 0
     ? `<p class="text-xs text-slate-400 text-center py-4">Keranjang masih kosong</p>`
-    : cart.map(i => `
-      <div class="flex justify-between items-center text-xs py-2 border-b border-slate-100">
-        <div>
-          <p class="font-bold text-slate-900">${i.name}</p>
-          <p class="text-slate-500">${i.quantity}x • ${formatIDR(i.price * i.quantity)}</p>
+    : entries.map(([id, c]) => `
+      <div class="flex justify-between items-center text-xs bg-slate-50 rounded-xl p-2.5">
+        <div class="min-w-0 pr-2">
+          <p class="font-bold truncate">${esc(c.menu.name)}</p>
+          <p class="text-slate-500">${formatIDR(c.menu.price)} • ${esc(c.menu.stall)}</p>
         </div>
-        <div class="flex items-center gap-1.5">
-          <button onclick="updateQty('${i.id}', -1)" class="w-6 h-6 bg-slate-100 rounded-lg font-bold">-</button>
-          <span class="font-bold">${i.quantity}</span>
-          <button onclick="updateQty('${i.id}', 1)" class="w-6 h-6 bg-slate-100 rounded-lg font-bold">+</button>
+        <div class="flex items-center gap-2 shrink-0">
+          <button onclick="changeQty('${id}', -1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 font-black">−</button>
+          <span class="font-black w-4 text-center">${c.qty}</span>
+          <button onclick="changeQty('${id}', 1)" class="w-6 h-6 rounded-lg bg-white border border-slate-200 font-black">+</button>
         </div>
       </div>
     `).join('');
 }
 
-function updateQty(id, delta) {
-  const item = cart.find(i => i.id === id);
-  if (!item) return;
-  item.quantity += delta;
-  if (item.quantity <= 0) cart = cart.filter(i => i.id !== id);
-  renderCart();
-}
-
 async function submitOrder() {
-  if (cart.length === 0) return alert('Keranjang kamu masih kosong!');
-  const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
-  const total = cart.reduce((sum, i) => sum + (i.price * i.quantity), 0);
-  const slot = document.getElementById('order-slot').value;
+  const entries = Object.values(cart);
+  if (entries.length === 0) return alert('Keranjang masih kosong!');
 
-  const { error } = await db.from('orders').insert([{
-    order_id: orderId,
-    student_name: user.name,
-    location: user.class,
-    slot,
-    total_amount: total,
-    items: cart,
-    status: 'pending'
-  }]);
+  const totalQty = entries.reduce((s, c) => s + c.qty, 0);
+  const subtotal = entries.reduce((s, c) => s + c.qty * c.menu.price, 0);
+  const fee = totalQty * DELIVERY_FEE_PER_ITEM;
 
-  if (error) return alert('Gagal memesan: ' + error.message);
-
-  trackEvent('purchase', {
-    transaction_id: orderId,
-    currency: 'IDR',
-    value: total,
-    delivery_slot: slot
-  });
-
-  alert('Pesanan terkirim! Pantau status pesananmu di bawah.');
-  cart = [];
-  renderCart();
-  fetchMyOrders();
-}
-
-async function fetchMyOrders() {
-  const { data: orders } = await db.from('orders').select('*').eq('student_name', user.name).order('created_at', { ascending: false });
-  const container = document.getElementById('my-orders-list');
-  if (!orders || orders.length === 0) return;
-
-  const statusLabels = {
-    pending: { text: 'Dimasak Kantin', color: 'bg-amber-100 text-amber-800' },
-    ready: { text: 'Menunggu Kurir', color: 'bg-purple-100 text-purple-800' },
-    delivering: { text: 'Sedang Diantar', color: 'bg-blue-100 text-blue-800' },
-    delivered: { text: 'Selesai Diterima', color: 'bg-emerald-100 text-emerald-800' }
+  const order = {
+    order_id: newOrderId(),
+    student_name: session.name,
+    location: session.class,
+    items: entries.map(c => ({
+      id: c.menu.id, name: c.menu.name, stall: c.menu.stall, price: c.menu.price, quantity: c.qty,
+    })),
+    delivery_fee: fee,
+    total_amount: subtotal + fee,
+    slot: document.getElementById('order-slot').value,
+    status: 'pending',
   };
 
-  container.innerHTML = orders.map(o => {
-    const st = statusLabels[o.status] || statusLabels.pending;
+  const { error } = await db.from('orders').insert([order]);
+  if (error) return alert('Gagal membuat pesanan: ' + error.message);
+
+  trackEvent('purchase', { order_id: order.order_id, value: order.total_amount, currency: 'IDR' });
+  cart = {};
+  renderCart();
+  loadMyOrders();
+  alert('Pesanan berhasil dibuat! Siapkan uang tunai (COD).');
+}
+
+// ---------- My orders ----------
+async function loadMyOrders() {
+  const { data, error } = await db.from('orders').select('*')
+    .eq('student_name', session.name).eq('location', session.class)
+    .order('created_at', { ascending: false }).limit(10);
+  const box = document.getElementById('my-orders-list');
+  if (error) { box.innerHTML = `<p class="text-xs text-red-500 text-center py-4">${esc(error.message)}</p>`; return; }
+  if (!data || data.length === 0) {
+    box.innerHTML = `<p class="text-xs text-slate-400 text-center py-4">Belum ada pesanan aktif.</p>`;
+    return;
+  }
+  box.innerHTML = data.map(o => {
+    const st = STATUS_LABEL[o.status] || { text: o.status, cls: 'bg-slate-100 text-slate-600' };
     return `
-      <div class="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1">
+      <div class="p-3 bg-slate-50 rounded-2xl text-xs space-y-1.5">
         <div class="flex justify-between items-center">
-          <span class="font-mono font-bold text-slate-500">${o.order_id}</span>
-          <span class="px-2 py-0.5 rounded-lg font-bold text-[10px] ${st.color}">${st.text}</span>
+          <span class="font-black">${esc(o.order_id)}</span>
+          <span class="px-2 py-0.5 rounded-full font-bold ${st.cls}">${st.text}</span>
         </div>
-        <p class="font-black text-slate-900">${formatIDR(o.total_amount)}</p>
-      </div>
-    `;
+        <ul class="pl-4 list-disc text-slate-600">
+          ${(o.items || []).map(i => `<li>${esc(i.name)} (x${i.quantity})</li>`).join('')}
+        </ul>
+        <div class="flex justify-between text-slate-500">
+          <span>${esc(o.slot)}</span>
+          <span class="font-bold text-emerald-600">${formatIDR(o.total_amount)}</span>
+        </div>
+      </div>`;
   }).join('');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  fetchMenus();
-  fetchMyOrders();
+  if (!session) return;
+  document.getElementById('student-info').textContent = `${session.name} • ${session.class}`;
+  loadMenus();
+  loadMyOrders();
+  renderCart();
   db.channel('student-live')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, fetchMenus)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchMyOrders)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, loadMyOrders)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'menus' }, loadMenus)
     .subscribe();
 });
